@@ -112,68 +112,45 @@ are those reachable from an Arduino build without a custom sdkconfig? Does
 AP+STA coexistence cost measurably once RSSI is controlled (an earlier +6%
 reading has the same drift problem)?
 
-### 3. Memory corruption on TLS station changes — isolated, not yet fixed
+### 3. HE-AAC buffer overrun — SOLVED
 
-This was filed as an "AAC crash". It isn't an AAC bug, and it isn't a stack-size
-bug. Both of those explanations are now disproven on hardware.
+**Root cause.** ESP8266Audio's `AudioGeneratorAAC` sizes its PCM output buffer
+for plain AAC:
 
-**Reproduce it in about 40 seconds** with `tools/racetest.py`: switch between
-three HTTPS stations every 6 seconds. The device panics within 2 to 10 switches.
+```c
+outSample = (int16_t *)malloc(1024 * 2 * sizeof(uint16_t));   // 4096 bytes
+```
 
-| Test | Result |
-| --- | --- |
-| 30 station changes, plain HTTP only | No crash |
-| 30 station changes, HTTPS | Panic within 2–10 |
-| 7 minutes of continuous HTTPS playback, no switching | No crash |
+The bundled libhelix is built with `AAC_ENABLE_SBR`, and with SBR active a frame
+produces twice as many samples per channel (`aacdec.c:186`:
+`outputSamps = nChans * AAC_MAX_NSAMPS * (sbrEnabled ? 2 : 1)`). A stereo HE-AAC
+frame therefore writes `2 * 2048 * 2 = 8192` bytes into that 4096-byte buffer:
+**a 4096-byte overrun on every frame**, on every `audio/aacp` station.
 
-So the trigger is TLS *session setup on a station change*, not streaming, not
-decoding, and not any one station.
+**Why it looked like an HTTPS bug.** The overrun always happens. Whether it is
+fatal depends only on what the allocator placed after the buffer, and mbedTLS's
+allocations shift the heap enough to put the IDLE0 task control block in the
+landing zone. Destroying a TCB kills the device. Plain HTTP looked clean because
+the control stations were LC-AAC and MP3 — never `audio/aacp`. Codec, not
+transport, was the variable the whole time.
 
-The panic is inconsistent, which is what made this hard to read. Three signatures
-came from the same build: `stack overflow in task IDLE0`, `LoadProhibited` inside
-`xTaskIncrementTick` walking a task list, and `BREAK instr` inside
-`_UserExceptionVector`. All three carry a `|<-CORRUPTED` backtrace, and the last
-means the stack pointer was already invalid when the exception was taken. About
-half the time the reported task name is garbage, because the corruption reaches
-the TCB.
+**The evidence.** A core dump of the crashed task shows 16-bit stores at a
+4-byte stride running through IDLE0's TCB — interleaved stereo, channel 0, which
+is exactly `outbuf[i * nChans + ch]`. The high half of each 32-bit word survives,
+including `0x454C` in the name field: the "LE" of "IDLE0".
 
-What has been ruled out, each on hardware:
+**The fix.** `outSample` is `protected`, so `SbrSafeAAC` in `main.cpp` subclasses
+the generator and re-sizes the buffer to the real worst case (2048 samples per
+channel, 2 channels) instead of forking the library. Costs 4 KB of heap.
 
-*   **Multichannel AAC.** A crafted vector with `channel_config=6` produced 1,393
-    instances of error −15 (`ERR_AAC_NCHANS_TOO_HIGH`) and 371 of error −3, and
-    never crashed.
-*   **Audio task stack.** It crashes identically at 16 K and 32 K. The audio task
-    peaks at about 5 KB even on the station that crashes it, and
-    `usStackHighWaterMark` is a minimum-ever figure, so a deep excursion cannot
-    be missed by sampling.
-*   **Heap block corruption.** `heap_caps_check_integrity_all()` bracketing every
-    step of teardown and tune reports clean right up to the panic.
-*   **The TLS free path.** Deliberately leaking the client instead of freeing it
-    still crashes, so this is TLS setup rather than teardown.
+**Worth reporting upstream** — this affects any ESP8266Audio user playing HE-AAC,
+which is much of internet radio.
 
-**Where suspicion currently sits.** IDLE0 is the task the corruption lands on,
-and it has very little room: this Arduino build sets
-`CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=1024` (lower than ESP-IDF's own 1536
-default) and the app leaves about **232 bytes free**, so it runs at ~77%.
-
-Be careful with the mechanism. An early guess was that Xtensa runs interrupt
-handlers on the current task's stack, so TLS crypto interrupts would run IDLE0
-off the end. **That is probably wrong:** this build also sets
-`CONFIG_FREERTOS_ISR_STACKSIZE=2096`, and ESP-IDF on Xtensa switches to a
-dedicated per-core interrupt stack. So a deep ISR is not by itself the
-explanation, and the reason IDLE0 specifically is being smashed on TLS setup is
-still unexplained. `CONFIG_MBEDTLS_HARDWARE_AES/MPI/SHA` are all enabled, so the
-handshake does drive DMA-capable crypto peripherals.
-
-The cheap next experiment is to raise the idle stack and see whether the
-reproducer goes quiet. **pioarduino supports `custom_sdkconfig`,** which rebuilds
-the IDF libraries — note this, because the brief elsewhere assumed sdkconfig was
-out of reach on an Arduino build. It takes several minutes and it writes
-`.dummy/`, `CMakeLists.txt` and `dependencies.lock` into the project directory.
-
-**Questions:** Is IDLE stack exhaustion via crypto ISRs a known ESP32-S3 failure
-mode? Does anyone run `WiFiClientSecure` through repeated connect cycles without
-this? Is there a supported way to keep one TLS session across station changes?
+**The boot guard held.** A device that had saved an HE-AAC station did reboot
+repeatedly, but the guard clears `bootTry` only after 20 s of `STREAMING` and the
+crash lands at ~6 s, so the counter advanced and the station was forgotten after
+three starts. Prolonged looping seen on the bench was the test harness re-tuning
+the crashing station on every trial, not a guard failure.
 
 ### 4. Codec coverage
 FLAC and Opus decoders are bundled in ESP8266Audio and currently refused by the

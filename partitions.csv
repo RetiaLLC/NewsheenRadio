@@ -1,11 +1,18 @@
 # Newsheen radio — 16 MB flash.
 # The data partition is named "spiffs" because arduino-esp32's LittleFS library
 # looks up that label by default. It is formatted as LittleFS.
+# The coredump space is taken from app0 (which is 4 MB for a 1.5 MB image),
+# NOT from spiffs: shrinking spiffs invalidates the existing LittleFS and the
+# device reformats 11.5 MB on every boot, which reads as a reboot loop.
+# The coredump partition is 384 KB, not 64 KB: an ELF dump carries every task
+# stack (the audio task alone is 32 KB) and a 64 KB partition failed at write
+# time with "Not enough space to save core dump!", discarding the one artifact
+# that identifies a corrupting write.
 # A coredump partition is included deliberately: this device has no UART header
 # and its USB-CDC console dies with the panic, so a crash is otherwise invisible.
 # Name,     Type, SubType,  Offset,   Size,     Flags
 nvs,        data, nvs,      0x9000,   0x5000,
 otadata,    data, ota,      0xe000,   0x2000,
-app0,       app,  ota_0,    0x10000,  0x400000,
+app0,       app,  ota_0,    0x10000,  0x200000,
+coredump,   data, coredump, 0x210000, 0x60000,
 spiffs,     data, spiffs,   0x410000, 0xBE0000,
-coredump,   data, coredump, 0xFF0000, 0x10000,

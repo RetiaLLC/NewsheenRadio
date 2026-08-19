@@ -145,24 +145,24 @@ doesn't implement.
 Connect at 115200 baud and enter `help` for the command list. Commands include
 `status`, `stats`, `tasks`, `tune`, `search`, `press`, `ramp`, and `netkill`.
 
-## Known issue: HTTPS stations can crash the device
+## Fixed: HE-AAC stations crashed the device
 
-Tuning an HTTPS station can panic and reboot the device. It happens at decoder
-start, right after the stream prebuffers, and it is intermittent rather than
-every time. Plain HTTP is unaffected: 30 consecutive plain-HTTP station changes
-run clean, while HTTPS fails within 2 to 10, and sometimes on the first tune.
-About half the station directory is HTTPS.
+Versions before 1.0.1 crashed and rebooted when tuning an HE-AAC station
+(`audio/aacp`), which is a large share of the directory.
 
-The device recovers on its own. It reboots, and the boot guard forgets the saved
-station after three starts without stable playback, so it cannot get stuck in a
-crash loop.
+ESP8266Audio's `AudioGeneratorAAC` sizes its PCM output buffer for plain AAC, at
+1024 samples per channel. The bundled libhelix decoder is built with SBR, and an
+SBR frame produces 2048 samples per channel, so every frame wrote 8192 bytes
+into a 4096-byte buffer. `SbrSafeAAC` in `src/main.cpp` re-sizes that buffer to
+the real worst case.
 
-The root cause is not yet found. Three theories have been tested on hardware and
-disproven: multichannel AAC frames, the audio task stack size, and heap
-corruption. `RESEARCH-BRIEF.md` records what was ruled out and how.
+The symptom looked like an HTTPS problem for a long time, because the overrun is
+only fatal when the allocator happens to place something vital after the buffer,
+and the TLS library's allocations put a FreeRTOS task control block there. The
+transport was never involved.
 
-To reproduce it, run `tools/racetest.py`; `tools/plaintest.py` is the plain-HTTP
-control.
+To reproduce it on an unfixed build, run `tools/phase0.py`, which reports
+tunes-to-failure. On the fixed build the same test runs clean.
 
 ## Documentation
 

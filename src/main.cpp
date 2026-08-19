@@ -189,6 +189,44 @@ bool NetStream::icyEnabled = true;
 
 static VUOutputI2S *out = nullptr;
 static AudioGenerator *gen = nullptr;         // whichever generator is live
+// ESP8266Audio's AudioGeneratorAAC sizes its PCM output buffer for plain AAC:
+//
+//     outSample = (int16_t *)malloc(1024 * 2 * sizeof(uint16_t));   // 4096 bytes
+//
+// but the bundled libhelix is built with AAC_ENABLE_SBR, and with SBR active a
+// frame yields *twice* as many samples per channel (aacdec.c:186:
+// outputSamps = nChans * AAC_MAX_NSAMPS * (sbrEnabled ? 2 : 1)). A stereo
+// HE-AAC frame therefore writes 2 * 2048 * 2 = 8192 bytes into that 4096-byte
+// buffer — a 4096-byte overrun on every single frame.
+//
+// Roughly half the directory serves HE-AAC ('audio/aacp'). The overrun is
+// always happening on those stations; whether it is fatal depends only on what
+// the allocator put after the buffer. It presented as an "HTTPS crash" because
+// mbedTLS's allocations shift the heap enough to place the IDLE0 task control
+// block in the landing zone, and destroying a TCB kills the device. The core
+// dump shows it directly: 16-bit stores at a 4-byte stride (interleaved stereo,
+// channel 0) writing through IDLE0's TCB, with the high half of each word left
+// intact — 0x454C, the "LE" of "IDLE0", still in the name field.
+//
+// outSample is protected, so the fix is a subclass that re-sizes it for the
+// real worst case rather than a fork of the library.
+class SbrSafeAAC : public AudioGeneratorAAC {
+public:
+    bool begin(AudioFileSource *source, AudioOutput *output) override {
+        if (!AudioGeneratorAAC::begin(source, output)) {
+            return false;
+        }
+        free(outSample);
+        // 2048 samples/channel (SBR) * 2 channels.
+        outSample = (int16_t *)malloc(2048 * 2 * sizeof(int16_t));
+        if (!outSample) {
+            Serial.println("[audio] out of memory sizing the AAC output buffer");
+            return false;
+        }
+        return true;
+    }
+};
+
 static AudioGeneratorMP3 *genMp3 = nullptr;
 static AudioGeneratorAAC *genAac = nullptr;
 static AudioGeneratorChiptune *genTune = nullptr;
@@ -1575,7 +1613,7 @@ void setup() {
     out->SetPinout(PIN_I2S_BCLK, PIN_I2S_LRC, PIN_I2S_DIN);
     out->SetGain(gainFor(volume));
     genMp3 = new AudioGeneratorMP3();
-    genAac = new AudioGeneratorAAC();
+    genAac = new SbrSafeAAC();
     genTune = new AudioGeneratorChiptune();
     genTone = new AudioGeneratorTone(&toneHz);
 
