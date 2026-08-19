@@ -126,6 +126,9 @@ a{color:var(--accent2)}
 </div>
 
 <div id=pFx hidden>
+ <section><h2>Visualizers</h2>
+  <p class=hint style="margin:0 0 10px">Audio-reactive, designed for the silicone topper: continuous light fields rather than per-pixel patterns, because diffusion erases individual pixels.</p>
+  <div class=grid id=vizlist></div></section>
  <section><h2>Effect</h2><div class=grid id=fxlist></div></section>
  <section><h2>Colour &amp; motion</h2>
   <label>Brightness</label><input type=range min=1 max=255 id=bri onchange="fxset()">
@@ -215,12 +218,13 @@ function tune(u,n){if(!u)return;api('/api/tune?n='+encodeURIComponent(n||'')+'&u
 function fx(){
  fetch('/api/fx').then(r=>r.json()).then(d=>{
   $('bri').value=d.bri; $('spd').value=d.speed;
-  const g=$('fxlist'); g.innerHTML='';
+  const g=$('fxlist'), v=$('vizlist'); g.innerHTML=''; v.innerHTML='';
+  const split=d.classic||d.names.length;
   d.names.forEach((nm,i)=>{
    const b=document.createElement('button'); b.textContent=nm;
    if(i==d.effect)b.className='on';
    b.onclick=()=>{fetch('/api/fx?effect='+i).then(fx)};
-   g.appendChild(b);
+   (i<split?g:v).appendChild(b);
   });
   const sw=$('swatches'); sw.innerHTML='';
   [[255,120,40,'Warm'],[255,255,255,'White'],[255,0,0,'Red'],[0,255,60,'Green'],

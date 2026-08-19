@@ -40,6 +40,7 @@
 #include "net_stream.h"
 #include "stream_buffer.h"
 #include "effects.h"
+#include "newsheen_viz.h"
 #include "web_page.h"
 
 #define AP_SSID  "Newsheen-Audio"
@@ -73,6 +74,15 @@
 // AudioOutputI2S with a tap on the sample stream so the LEDs can follow whatever
 // is playing — speech, chiptune, file or stream — without any of them knowing
 // about LEDs.
+// Ten diffusion-native visualizers (newsheen_viz.h). The design premise is that
+// the silicone topper is a spatial low-pass filter: per-pixel identity does not
+// survive it, so each mode is a continuous light field sampled at the 8 pixel
+// angles rather than per-pixel logic.
+static nh::FeatureExtractor vizFeat;
+static nh::Visualizer viz;
+static portMUX_TYPE vizMux = portMUX_INITIALIZER_UNLOCKED;
+static nh::Features vizSnapshot;
+
 class VUOutputI2S : public AudioOutputI2S {
 public:
     // Split the stream into three bands and track their envelopes, so the LEDs
@@ -88,6 +98,9 @@ public:
         // crossovers in the wrong place for half the sources.
         aBass = 1.0f - expf(-2.0f * PI * 160.0f / rate);
         aMid = 1.0f - expf(-2.0f * PI * 1800.0f / rate);
+        // The visualizer bank derives its coefficients from the real stream rate
+        // too; stations are a mix of 44.1k and 48k.
+        vizFeat.begin((float)rate);
         return AudioOutputI2S::SetRate(hz);
     }
 
@@ -97,6 +110,14 @@ public:
             return ok;
         }
         float x = sample[0] * (1.0f / 32768.0f);
+        // Feed the visualizer extractor the mono sum. It publishes a snapshot
+        // once per 1024-sample block; the LED task on the other core reads it
+        // under a spinlock so it never sees a half-written struct.
+        if (vizFeat.pushSample((x + sample[1] * (1.0f / 32768.0f)) * 0.5f)) {
+            portENTER_CRITICAL(&vizMux);
+            vizSnapshot = vizFeat.features();
+            portEXIT_CRITICAL(&vizMux);
+        }
         lpB += (x - lpB) * aBass;
         lpM += (x - lpM) * aMid;
         float bass = lpB;
@@ -195,6 +216,17 @@ static char curUrl[320] = "";
 static Adafruit_NeoPixel strip(NUM_PIXELS, PIN_NEOPIXEL, NEO_GRB + NEO_KHZ800);
 static EffectEngine fx(strip, NUM_PIXELS);
 static EffectState fxState;
+#define TOTAL_EFFECTS (FX_COUNT + nh::VIZ_MODE_COUNT)
+static float vizStationHue = 210.0f;
+
+// Stable per-station identity colour for Beacon.
+static float hueForStation(const char *name) {
+    uint32_t h = 2166136261u;
+    for (const char *p = name; p && *p; p++) {
+        h = (h ^ (uint8_t)*p) * 16777619u;
+    }
+    return (float)(h % 360u);
+}
 static WebServer server(80);
 static DNSServer dns;
 static Preferences prefs;
@@ -375,6 +407,32 @@ static void ledTask(void *) {
         bool celebrating = (netPhase == NET_ONLINE) && (now - onlineAtMs < 900);
         if (netPhase != NET_ONLINE || celebrating) {
             renderNetStatus(now);
+        } else if (fxState.effect >= FX_COUNT) {
+            static uint32_t vizLast = 0;
+            float dt = vizLast ? (now - vizLast) / 1000.0f : 0.025f;
+            vizLast = now;
+            if (dt <= 0 || dt > 0.5f) {
+                dt = 0.025f;
+            }
+            nh::Features f;
+            portENTER_CRITICAL(&vizMux);
+            f = vizSnapshot;
+            portEXIT_CRITICAL(&vizMux);
+            // Decay pulse envelopes on the render side, as the reference
+            // simulator does, so they fade smoothly between audio blocks.
+            f.beat *= expf(-dt / 0.25f);
+            f.glint *= expf(-dt / 0.12f);
+            nh::RGBf rgb[nh::VIZ_N];
+            uint8_t px[nh::VIZ_N][3];
+            viz.setStationHue(vizStationHue);
+            viz.render((nh::VizMode)(fxState.effect - FX_COUNT),
+                       now / 1000.0f, dt, f, rgb);
+            nh::Visualizer::toBytes(rgb, px, 1.0f);
+            strip.setBrightness(fxState.brightness);
+            for (int i = 0; i < NUM_PIXELS && i < nh::VIZ_N; i++) {
+                strip.setPixelColor(i, strip.Color(px[i][0], px[i][1], px[i][2]));
+            }
+            strip.show();
         } else {
             fx.render(fxState, now);
         }
@@ -597,6 +655,7 @@ static bool startStream(const char *url, const char *name, int depth = 0) {
         strlcpy(npStation, "Internet radio", sizeof(npStation));
     }
     strlcpy(npTitle, npStation, sizeof(npTitle));   // until ICY says otherwise
+    vizStationHue = hueForStation(npStation);      // Beacon identity colour
     prefs.putString("lastUrl", url);
     prefs.putString("lastName", npStation);
     return true;
@@ -1054,7 +1113,7 @@ static void handleStatus() {
 
 static void handleFx() {
     if (server.hasArg("effect")) {
-        fxState.effect = constrain(server.arg("effect").toInt(), 0, FX_COUNT - 1);
+        fxState.effect = constrain(server.arg("effect").toInt(), 0, TOTAL_EFFECTS - 1);
     }
     if (server.hasArg("bri")) {
         fxState.brightness = constrain(server.arg("bri").toInt(), 1, 255);
@@ -1082,6 +1141,11 @@ static void handleFx() {
     for (int i = 0; i < FX_COUNT; i++) {
         names.add(EFFECT_NAMES[i]);
     }
+    for (int i = 0; i < nh::VIZ_MODE_COUNT; i++) {
+        names.add(nh::VIZ_NAMES[i]);
+    }
+    d["classic"] = FX_COUNT;              // UI splits the grid here
+    d["hue"] = vizStationHue;
     String s;
     serializeJson(d, s);
     sendJson(s);
@@ -1741,6 +1805,10 @@ static void serviceBootButton() {
 // the device testable without a phone on its access point, which is otherwise
 // the only way in. Credentials are taken as arguments and stored in NVS — never
 // compiled in, so they never reach the repo.
+static const char *effectName(int i) {
+    return i < FX_COUNT ? EFFECT_NAMES[i] : nh::VIZ_NAMES[i - FX_COUNT];
+}
+
 static void printStatus() {
     static const char *names[] = {"idle", "speaking", "singing", "file", "streaming"};
     Serial.printf("state      : %s\n", names[state]);
@@ -1748,7 +1816,7 @@ static void printStatus() {
     Serial.printf("title      : %s\n", npTitle);
     Serial.printf("url        : %s\n", curUrl);
     Serial.printf("effect     : %d (%s)  bri=%d speed=%d\n", fxState.effect,
-                  EFFECT_NAMES[fxState.effect], fxState.brightness, fxState.speed);
+                  effectName(fxState.effect), fxState.brightness, fxState.speed);
     Serial.printf("volume     : %.2f\n", volume);
     if (WiFi.status() == WL_CONNECTED) {
         Serial.printf("wifi       : %s  ip=%s  rssi=%d  ch=%d\n", WiFi.SSID().c_str(),
@@ -1791,7 +1859,8 @@ static void handleLine(String line) {
                        "tune <url>           play a stream\n"
                        "play <file>          play an MP3 from LittleFS\n"
                        "say <text> | sing | stop\n"
-                       "fx <0-10> | bri <1-255> | speed <0-255> | vol <0-100>\n"
+                       "fx <0-24> | viz <0-9> | viz hue <0-359> | feat\n"
+                       "bri <1-255> | speed <0-255> | vol <0-100>\n"
                        "press <1|2|3>        mute / next favourite / random station\n"
                        "mute [0|1]           toggle or set mute\n"
                        "status | stats | files | favs");
@@ -1919,8 +1988,56 @@ static void handleLine(String line) {
         NetStream::icyEnabled = arg.toInt() != 0;
         Serial.printf("[cli] ICY metadata %s\n", NetStream::icyEnabled ? "on" : "off");
     } else if (cmd == "fx") {
-        fxState.effect = constrain(arg.toInt(), 0, FX_COUNT - 1);
-        Serial.printf("[cli] effect %d = %s\n", fxState.effect, EFFECT_NAMES[fxState.effect]);
+        fxState.effect = constrain(arg.toInt(), 0, TOTAL_EFFECTS - 1);
+        Serial.printf("[cli] effect %d = %s\n", fxState.effect, effectName(fxState.effect));
+    } else if (cmd == "viz") {
+        if (arg.startsWith("hue")) {
+            vizStationHue = constrain(arg.substring(3).toFloat(), 0.0f, 359.0f);
+            Serial.printf("[cli] station hue %.0f\n", vizStationHue);
+        } else {
+            int v = constrain(arg.toInt(), 0, nh::VIZ_MODE_COUNT - 1);
+            fxState.effect = FX_COUNT + v;
+            Serial.printf("[cli] visualizer %d = %s\n", v, nh::VIZ_NAMES[v]);
+        }
+    } else if (cmd == "vizdump") {
+        // Render one frame of every mode from the live features and print the
+        // 8 post-gamma RGB triples. Proves the integration renders rather than
+        // just that the selector maps names, and gives a bench A/B against the
+        // real topper without needing eyes on the ring.
+        nh::Features f;
+        portENTER_CRITICAL(&vizMux);
+        f = vizSnapshot;
+        portEXIT_CRITICAL(&vizMux);
+        nh::Visualizer probe;
+        probe.begin();
+        probe.setStationHue(vizStationHue);
+        int only = arg.length() ? arg.toInt() : -1;
+        for (int m = 0; m < nh::VIZ_MODE_COUNT; m++) {
+            if (only >= 0 && m != only) {
+                continue;
+            }
+            nh::RGBf rgb[nh::VIZ_N];
+            uint8_t px[nh::VIZ_N][3];
+            // settle the mode's internal state, then sample a frame
+            for (int k = 0; k < 40; k++) {
+                probe.render((nh::VizMode)m, millis() / 1000.0f + k * 0.03f, 0.03f, f, rgb);
+            }
+            nh::Visualizer::toBytes(rgb, px, 1.0f);
+            Serial.printf("%-14s", nh::VIZ_NAMES[m]);
+            for (int i = 0; i < nh::VIZ_N; i++) {
+                Serial.printf(" %02x%02x%02x", px[i][0], px[i][1], px[i][2]);
+            }
+            Serial.println();
+        }
+    } else if (cmd == "feat") {
+        nh::Features f;
+        portENTER_CRITICAL(&vizMux);
+        f = vizSnapshot;
+        portEXIT_CRITICAL(&vizMux);
+        Serial.printf("rms=%.3f envF=%.3f envS=%.3f bass=%.3f mid=%.3f treb=%.3f\n",
+                      f.rms, f.envF, f.envS, f.bass, f.mid, f.treb);
+        Serial.printf("tilt=%.3f beat=%.3f beats=%u glint=%.3f glints=%u onset/s=%.2f silence=%.2f\n",
+                      f.tilt, f.beat, f.beatCount, f.glint, f.glintCount, f.onsetRate, f.silence);
     } else if (cmd == "bri") {
         fxState.brightness = constrain(arg.toInt(), 1, 255);
     } else if (cmd == "speed") {
