@@ -170,6 +170,8 @@ control.
     assumptions the design depends on.
 *   [RESEARCH-BRIEF.md](RESEARCH-BRIEF.md) records measured performance figures,
     resolved defects, and open problems.
+*   [TEST-PLAN.md](TEST-PLAN.md) is the plan for finding and proving the fix for
+    the HTTPS crash above.
 
 ## License
 
