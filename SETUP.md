@@ -1,143 +1,145 @@
-# Newsheen Radio — user flow and assumptions
+# Set up Newsheen Radio
 
-## The flow
+This guide describes what the device does at each step of setup, and lists the
+assumptions the design depends on.
 
-### 1. Power on
+## Setup flow
 
-Plug the puck into USB-C. Nothing else is required — no app, no account, no
-pairing.
+### 1. Connect power
 
-| | |
-|---|---|
-| **Ring** | slow amber pulse = "I need setting up" |
-| **Voice** | *"Join my wifi network, News Sheen Audio, password meow meow, to set me up."* |
-| **Radio** | access point `Newsheen-Audio` is up |
+Plug the puck into USB-C. No app, account, or pairing is required.
 
-The device says the credentials out loud because there is nowhere else a
-first-time user could learn them — there's no screen, and a sticker is not
-something firmware can ship.
+| Output | Behavior |
+| --- | --- |
+| Ring | Slow amber pulse, meaning the device needs configuration |
+| Audio | Announces the network name and spells out the password |
+| Radio | Broadcasts the `Newsheen-Audio` access point |
 
-### 2. Join the puck's network
+The device speaks the credentials because it has no screen. A first-time user has
+no other way to learn them.
 
-On a phone or laptop, join **`Newsheen-Audio`** (password **`meowmeow`**).
+### 2. Join the device's network
 
-The setup page **opens by itself**: the puck runs a DNS server that points every
-lookup at itself, which is what makes iOS and Android show their "sign in to
-network" sheet. If it doesn't appear, browse to **`http://192.168.4.1/`**.
+On a phone or laptop, join `Newsheen-Audio` with the password `meowmeow`.
 
-### 3. Point it at your Wi-Fi
+The setup page opens automatically. The device runs a DNS server that resolves
+every lookup to itself, which triggers the captive-portal prompt on iOS and
+Android. If the page doesn't open, go to `http://192.168.4.1/`.
 
-Wi-Fi tab → **Scan** → pick your network → password → **Save & connect**.
+### 3. Select your Wi-Fi network
 
-> **Expect to be dropped for a few seconds.** The ESP32 has one radio, so when
-> it joins your network its own access point has to move to that network's
-> channel. Your phone will reconnect on its own.
+Open the **Wi-Fi** tab, select **Scan**, choose your network, enter the password,
+and select **Save & connect**.
 
-| | |
-|---|---|
-| **Ring** | blue chase while joining |
-| **Then** | green sweep once, then your chosen effect |
+The device disconnects you for a few seconds. The ESP32-S3 has one radio, so its
+access point must move to your network's channel. Your device reconnects on its
+own.
 
-Once it's online the header shows the puck's address on your home network. From
-then on you can leave `Newsheen-Audio`, go back to your normal Wi-Fi, and reach
-it at **`http://newsheen.local/`** — which is how you'd actually use it day to
-day. The access point stays up permanently regardless, so a wrong password or a
-changed network can never lock you out.
+| Output | Behavior |
+| --- | --- |
+| Ring | Blue chase while connecting, then one green sweep |
+| Then | Your selected effect |
 
-### 4. Play something
+After it connects, the header shows the device's address on your network. You can
+then leave `Newsheen-Audio`, return to your usual Wi-Fi, and reach the device at
+`http://newsheen.local/`. The access point stays available at all times, so an
+incorrect password or a changed network can't lock you out.
 
-Radio tab → type a station, genre or country → **Search** → **Play**.
-**★** saves a favourite; favourites survive a power cut.
+### 4. Play a station
 
-Three other ways in:
+Open the **Radio** tab, enter a station name, genre, or country, and select
+**Search**, then **Play**. Select the star to save a favorite. Favorites persist
+across power cycles.
 
-- **Paste a stream URL** — any `.mp3`/`.aac` stream, no directory involved.
-- **radio.garden** — drag *Send to Newsheen* to your bookmarks bar, then click it
-  while a station plays on radio.garden. Your browser resolves the station and
-  hands the puck the stream. (The puck can't talk to radio.garden itself; see
-  "Why not radio.garden" below.)
-- **The button on the puck** — short press walks your favourites, long press
-  stops. No phone needed.
+Three other ways to start playback:
 
-### 5. Live with it
+*   **Paste a stream URL.** Any `.mp3` or `.aac` stream works, with no directory
+    involved.
+*   **Use the globe.** Drag to spin, zoom with the buttons, and tap a marker to
+    tune that station.
+*   **Press the button.** One press mutes, two play the next favorite, three play
+    a random station. No phone required.
 
-- **Effects tab** — 11 patterns, brightness, speed, colour. Independent of audio,
-  except *Audio VU* which follows whatever is playing.
-- **Files tab** — upload MP3s to play from the puck itself, no internet needed.
-- **Power cycle** — comes back on the last station automatically.
+### 5. Everyday use
 
----
+*   **Effects tab.** 15 patterns with brightness, speed, and color controls. Four
+    respond to audio.
+*   **Files tab.** Upload MP3 files to play without an internet connection.
+*   **Power cycle.** The device resumes the last station automatically.
 
-## Core assumptions
+## Assumptions
 
-Everything below has to be true for the flow above to work. Ticked items are
-verified on this hardware; unticked ones are the things to check first when
-something misbehaves.
+The setup flow depends on the following conditions. Checked items are verified on
+this hardware. Check the unchecked items first when something doesn't work.
 
 ### Hardware
 
-- [x] **MAX98357A wired straight across to J3** — `35_SDA→LRC, 36_SCL→BCLK,
-      37_WS→DIN, 39_SD→GAIN, 38_SCK→SD, GND→GND, 3V3→VIN`.
-- [x] **Module is N16R2** (16 MB quad flash, 2 MB **quad** PSRAM) so GPIO33–37 are
-      free. An N16R8's octal PSRAM eats those pins and kills the whole header.
-- [ ] **U5 DIR bodge is present** — without it the level shifter runs backwards
-      and *every LED effect is invisible*, no matter what the firmware does.
-      This is the single assumption most likely to be false on a given puck.
-- [ ] **Amp supply is adequate for sustained playback.** J3's 3V3 is the shared
-      AMS1117 LDO. Fine at moderate volume; for hours at high volume, feed VIN
-      from +5 V (U5 pin 6 or U4 pad 3) and bulk-cap it.
+*   [x] The MAX98357A connects straight across to J3: `35_SDA` to LRC, `36_SCL`
+    to BCLK, `37_WS` to DIN, `39_SD` to GAIN, `38_SCK` to SD, GND to GND, and 3V3
+    to VIN.
+*   [x] The module is an N16R2 with 16 MB quad flash and 2 MB quad PSRAM, which
+    leaves GPIO33 through GPIO37 available. An N16R8 uses octal PSRAM and
+    consumes those pins, which disables the header.
+*   [ ] The U5 DIR modification is present. Without it, the level shifter runs
+    backward and no LED effect is visible regardless of the firmware. This is the
+    assumption most likely to be false on a given board.
+*   [ ] The amplifier supply is adequate for sustained playback. J3 supplies 3V3
+    from the shared regulator. For extended use at high volume, supply VIN from
+    +5 V at U5 pin 6 or U4 pad 3, and add a bulk capacitor.
 
 ### Network
 
-- [ ] **The network is 2.4 GHz.** The ESP32-S3 has no 5 GHz radio. A 5 GHz-only
-      SSID will not even appear in the scan. This is the most common setup
-      failure and it looks like a broken device.
-- [ ] **WPA2 (or open).** WPA3-only networks may refuse the join.
-- [ ] **No captive portal or enterprise (802.1X) login.** Hotel, campus and guest
-      networks that need a browser sign-in cannot be joined by the puck.
-- [ ] **SSID is broadcast.** Hidden networks won't show in the scan; they can
-      still be typed in by hand.
+*   [ ] The network uses 2.4 GHz. The ESP32-S3 has no 5 GHz radio, so a 5 GHz
+    network doesn't appear in the scan. This is the most common setup failure and
+    it resembles a hardware fault.
+*   [ ] The network uses WPA2 or is open. WPA3-only networks might refuse the
+    connection.
+*   [ ] The network has no captive portal or 802.1X login. The device can't
+    complete a browser-based sign-in.
+*   [ ] The network broadcasts its SSID. Hidden networks don't appear in the
+    scan, but you can enter the name manually.
 
 ### Runtime
 
-- [x] **192 KB stream buffer allocates in PSRAM.** Verified; the boot log says which.
-      If it falls back to 32 KB of internal RAM, streaming will stutter.
-- [x] **Buffer holds under load.** 7-minute soak: ring steady at 124–128 KB of 196 KB,
-      network in 15.8–16.6 KB/s against decoder out 15.1–15.5 KB/s, zero underflows.
-- [ ] **Heap survives a TLS handshake and a decoder at the same time.** HTTPS
-      stations are the memory-hungry case; the boot log prints free heap.
-- [x] **Any task touching a socket has a big enough stack.** `netfill` needs 12 KB,
-      not the 4 KB its own code suggests: `NetworkClient::read()` runs the lwIP ACK
-      transmit path and the Wi-Fi driver's 802.11 output on the *caller's* stack,
-      38 frames deep. At 4 KB this panicked the device a minute into every stream.
-      Measured headroom now: 7924 bytes free of 12288.
-- [x] **No task starves another on the same core.** The audio task must yield each
-      pass; without it the priority-1 Arduino loop task never runs and the web UI,
-      serial CLI and button all go dead while audio plays.
-- [ ] **radio-browser.info is reachable** — only needed for *search*. Favourites,
-      pasted URLs and the bookmarklet all work without it.
-- [ ] **The chosen station is actually up.** Directory entries go stale; the
-      firmware retries a dropped stream three times, then gives up and idles.
+*   [x] The 192 KB stream buffer allocates in PSRAM. The boot log reports which
+    memory it uses. A fallback to 32 KB of internal RAM causes audible dropouts.
+*   [x] The buffer holds under load. In a 25-minute test the buffer stayed
+    between 124 KB and 128 KB of 196 KB, with network input at 15.8–16.6 KB/s
+    against decoder output of 15.1–15.5 KB/s and no underruns.
+*   [x] Tasks that use sockets have adequate stack. The `netfill` task needs
+    12 KB, not the 4 KB its own code suggests, because `NetworkClient::read()`
+    runs the lwIP acknowledgment path and the Wi-Fi driver's 802.11 output on the
+    calling task's stack, 38 frames deep. At 4 KB this triggered a stack canary
+    panic about a minute into every stream. Measured headroom is now 7,924 bytes.
+*   [x] No task starves another on the same core. The audio task yields on every
+    pass. Without this, the priority-1 Arduino loop task never runs, which
+    disables the web interface, the serial console, and the button during
+    playback.
+*   [ ] radio-browser.info is reachable. This affects search only. Favorites,
+    pasted URLs, and the offline catalog work without it.
+*   [ ] The selected station is online. Directory entries go stale. The firmware
+    retries a dropped stream with backoff, then stops and reports the reason.
 
 ### Deliberate limitations
 
-- **HTTPS streams are fetched without certificate validation.** Validating a
-  directory of thousands of independent stations would mean shipping and
-  rotating a CA bundle. The payload is a public broadcast and nothing secret is
-  ever sent, so this is a considered trade, not an oversight.
-- **The web UI has no authentication.** Anyone on your Wi-Fi can change the
-  station. That is the right call for a lamp and the wrong call for anything
-  that matters — don't expose it to the internet.
-- **The access point password is fixed** (`meowmeow`) and spoken aloud at boot
-  when unconfigured.
+*   **HTTPS streams skip certificate validation.** Validating thousands of
+    independent stations would require shipping and rotating a certificate
+    bundle. The payload is a public broadcast and the device sends no credentials.
+*   **The web interface has no authentication.** Anyone on your network can
+    change the station. Don't expose the device to the internet.
+*   **The access point password is fixed** at `meowmeow` and is spoken aloud
+    during setup.
+*   **Bluetooth audio isn't possible.** The ESP32-S3 has no Bluetooth Classic
+    radio, and A2DP requires BR/EDR.
 
-### Station sources
+## Station sources
 
-**radio-browser.info** backs the search box: open, no auth, answers over plain HTTP so no TLS
-session is needed just to search.
+**radio-browser.info** provides search. It requires no authentication and
+responds over plain HTTP, so search needs no TLS session.
 
-**radio.garden** is usable too — its API needs browser-shaped request headers (a `Referer` in
-particular; a bare request gets HTTP 403, which is what led to an earlier note here claiming it
-was blocked). `tools/radio_garden_dump.py` walks its ~12,465 places and ~30,000 stations and
-resolves each to its real upstream stream URL. Only those resolved URLs are useful to the puck —
-the radio.garden redirect goes back through the gated API and the device would get 403 on it.
+**radio.garden** provides the optional offline catalog. Its API requires
+browser-style request headers, including a `Referer` header. A request without
+them returns HTTP 403. `tools/radio_garden_dump.py` walks its 12,465 places and
+38,186 stations and resolves each to its upstream stream URL. Only those resolved
+URLs work on the device, because the radio.garden redirect passes back through
+the same API.

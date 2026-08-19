@@ -1,75 +1,77 @@
 # Newsheen Radio
 
-Internet radio, a 38,000-station atlas, and an audio-reactive light show — inside
-a silicone cat lamp.
+Newsheen Radio is ESP32-S3 firmware that turns a Retia Newsheen puck into an
+internet radio with an audio-reactive light ring.
 
-Firmware for the **Retia Newsheen puck** (`esp32_base_puck_v2`, ESP32-S3) with a
-MAX98357A I²S amplifier on the sensor header. It streams internet radio over
-HTTP and HTTPS, carries the entire radio.garden catalogue on its own flash so
-browsing works without any directory service, and drives the puck's 8-pixel ring
-from live frequency analysis of whatever is playing.
+The firmware targets the `esp32_base_puck_v2` board with a MAX98357A I²S
+amplifier connected to the J3 sensor header. It streams internet radio over HTTP
+and HTTPS, searches an online station directory, and drives the puck's 8-pixel
+ring from a live frequency analysis of the audio.
 
-Flash it from **[scriptkitty.sh](https://scriptkitty.sh/#newsheen)** — no
-toolchain required.
+To install it without a toolchain, use [scriptkitty.sh](https://scriptkitty.sh/#newsheen).
 
----
+## Features
 
-## What it does
+*   **Streaming.** Plays MP3 and AAC/HE-AAC over HTTP and HTTPS on any port. The
+    firmware follows redirects, resolves `.m3u` and `.pls` playlists, and strips
+    Shoutcast and Icecast metadata to display the current track. A 192 KB PSRAM
+    buffer absorbs network interruptions, and playback reconnects automatically.
+    Recovery is verified against a forced 60-second outage.
+*   **Station search.** Searches radio-browser.info by name, genre, or country.
+    You can also paste a stream URL directly, and favorites persist across power
+    cycles.
+*   **Offline catalog (optional).** Build the radio.garden catalog with the
+    included tools to store 37,963 stations from 227 countries on the device.
+    Every entry includes coordinates. Browsing seeks into a byte-offset index on
+    the filesystem, so it works without an internet directory. The catalog isn't
+    part of the flashed image. See [Build the station catalog](#build-the-station-catalog).
+*   **Globe.** Drag to spin, zoom with the buttons, scroll wheel, or a pinch
+    gesture, and tap a marker to tune that station. The globe uses about 11 KB of
+    Natural Earth coastline geometry with no map tiles and no external requests,
+    so it renders while you're connected to the puck's own access point.
+*   **Light effects.** 15 effects, 4 of which respond to audio: Spectrum, Pulse,
+    Aurora, and Sparkle, plus a peak-hold VU meter and 10 clock-driven patterns.
+*   **Local playback.** Plays MP3 files from the device filesystem, speaks
+    through the SAM synthesizer, and plays a built-in chiptune.
 
-**Radio.** MP3 and AAC/HE-AAC, plain HTTP and TLS, on any port. Follows
-redirects, resolves `.m3u`/`.pls` playlists, strips Shoutcast/Icecast metadata
-and shows the now-playing title. Rides out network outages from a 192 KB PSRAM
-buffer and reconnects on its own — verified against a forced 60-second drop.
+## Set up the radio
 
-**38,000 stations, offline.** The full radio.garden catalogue lives on the
-device: 37,963 stations across 227 countries, every one with coordinates.
-Browsing is a seek into a byte-offset index on LittleFS, so it needs no internet
-directory at all. Text search additionally uses radio-browser.info when online.
+1.  Connect power. The ring pulses amber and the device announces how to reach
+    it, including the access point password.
+2.  Join the `Newsheen-Audio` network with the password `meowmeow`. The setup
+    page opens automatically. If it doesn't, go to `http://192.168.4.1/`.
+3.  Select your Wi-Fi network and enter its password.
 
-**A globe.** Drag to spin, scroll or pinch or use the +/− buttons to zoom, tap a
-light to tune it. Natural Earth coastlines, ~3.9 KB of geometry, no map tiles and
-no CDN — it renders while you're joined to the puck's own access point.
+    The device disconnects you for a few seconds while it joins. The ESP32-S3 has
+    one radio, so its access point must move to your network's channel.
 
-**Fifteen light effects**, four of them audio-reactive: *Spectrum* (three bands
-around the ring), *Pulse* (beat-triggered bloom), *Aurora* (slow colour field),
-*Sparkle* (treble strikes), plus a peak-hold VU meter and ten classic patterns.
+    After it connects, reach the device at `http://newsheen.local/`.
 
-**Also** plays MP3s from its own flash, speaks (SAM synthesiser), and sings an
-original chiptune.
+The access point stays available at all times, so an incorrect password can't
+lock you out.
 
-## Setting it up
-
-1. **Power it.** The ring breathes amber and it says how to reach it — including
-   spelling out the password, because there's no screen to read it from.
-2. **Join `Newsheen-Audio`** (password `meowmeow`). The setup page opens itself;
-   otherwise browse to `http://192.168.4.1/`.
-3. **Point it at your Wi-Fi.** Expect a few seconds of disconnection — one radio
-   can't serve an access point and join a network on two different channels at
-   once. Afterwards it's at `http://newsheen.local/`.
-
-The access point never goes away, so a wrong password can't lock you out.
-
-## The button
+## Button controls
 
 | Gesture | Action |
-|---|---|
-| 1 press | Mute / unmute · **offline:** repeat the setup instructions |
-| 2 presses | Next favourite |
-| 3 presses | Random station (filtered to what the hardware can sustain) |
-| Hold | Volume ramps up and down — release to set. The ring is the slider. |
-| BOOT held 5 s | Arms a Wi-Fi reset; confirm with a press of the round button |
+| --- | --- |
+| Press once | Mute or unmute. When offline, repeats the setup instructions. |
+| Press twice | Play the next favorite. |
+| Press three times | Play a random station. |
+| Press and hold | Ramp the volume up and down. Release to set it. The ring shows the level. |
+| Hold BOOT for 5 seconds | Arm a Wi-Fi reset. Press the round button to confirm. |
 
-The reset needs two buttons on purpose: GPIO0 doubles as the USB DTR line, so a
-serial monitor holding DTR would otherwise wipe your network settings by itself.
+The Wi-Fi reset requires two buttons because GPIO0 also carries the USB DTR
+signal. A serial monitor that asserts DTR would otherwise erase your network
+settings.
 
-## Wiring
+## Wire the amplifier
 
-The MAX98357A breakout and the puck's J3 header are both 1×07, and laid side by
-side in silkscreen order **GND meets GND and VIN meets 3V3** — so the default
-build wires straight across with no crossed leads:
+The MAX98357A breakout and the puck's J3 header both have 7 pins. When you align
+them in silkscreen order, GND meets GND and VIN meets 3V3, so the default build
+connects them straight across:
 
-| J3 (silk, top → bottom) | MAX98357A |
-|---|---|
+| J3 pin (silkscreen order) | MAX98357A pin |
+| --- | --- |
 | `35_SDA` | LRC |
 | `36_SCL` | BCLK |
 | `37_WS` | DIN |
@@ -78,59 +80,83 @@ build wires straight across with no crossed leads:
 | `GND` | GND |
 | `3V3` | VIN |
 
-The ESP32-S3 routes I²S through its GPIO matrix, so it doesn't matter that these
-aren't the pins the silkscreen calls I²S. Build `-e newsheen-speaker-classic` if
-you'd rather wire flying leads to the labelled pins.
+The ESP32-S3 routes I²S through its GPIO matrix, so these pins don't need to be
+the ones labeled I²S on the silkscreen. To wire flying leads to the labeled pins
+instead, build the `newsheen-speaker-classic` environment.
 
-**Two things before you solder.** J3's 3V3 comes from the same LDO as the MCU;
-bulk-cap the amplifier's VIN, and for real volume feed it from +5 V (U5 pin 6 or
-U4 pad 3) instead. And this assumes the **N16R2** module — an N16R8's octal PSRAM
-consumes GPIO33–37 and kills the header entirely. Run `esptool flash-id` first.
+**Caution:** J3 supplies 3V3 from the same regulator as the microcontroller. Add
+a bulk capacitor across the amplifier's VIN. For higher volume, supply VIN from
++5 V at U5 pin 6 or U4 pad 3 instead.
 
-The 8 NeoPixels need the U5 DIR bodge that every Pusheen puck needs; the GPIO48
-debug LED follows the audio regardless, so an un-bodged puck still shows life.
+**Caution:** This wiring requires the N16R2 module. The N16R8 module uses octal
+PSRAM, which consumes GPIO33 through GPIO37 and makes the header unusable. Run
+`esptool flash-id` to confirm which module your board has.
 
-## Building it yourself
+The 8 NeoPixels require the U5 DIR modification common to all Pusheen pucks. The
+GPIO48 debug LED follows the audio regardless, so you can confirm the firmware
+runs on an unmodified board.
+
+## Build the firmware
 
 ```bash
-pio run -e newsheen-speaker                     # firmware
-pio run -e newsheen-speaker -t buildfs          # filesystem (see below)
+pio run -e newsheen-speaker
+pio run -e newsheen-speaker -t buildfs
 ```
 
-Needs an **arduino-esp32 3.x** platform — ESP8266Audio 2.4 pulls in the IDF5 I²S
-driver, so the 2.0.x platforms other puck projects use will not compile it.
+The build requires an arduino-esp32 3.x platform. ESP8266Audio 2.4 includes the
+IDF5 I²S driver, which doesn't compile against the 2.0.x platforms that other
+puck projects use.
 
-To rebuild the station catalogue:
+## Build the station catalog
 
 ```bash
 cd tools
-python3 radio_garden_dump.py --probe        # check reachability first
-python3 radio_garden_dump.py --resolve      # ~38k stations, resumable
-python3 build_catalogue.py                  # -> data/stations.tsv + countries.idx
+python3 radio_garden_dump.py --probe
+python3 radio_garden_dump.py --resolve
+python3 build_catalogue.py
 ```
 
-Only the **resolved upstream URLs** are usable by the device; the radio.garden
-redirect URL goes back through an API that refuses non-browser clients.
+`build_catalogue.py` writes `data/stations.tsv` and `data/countries.idx`. Flash
+them with `pio run -t uploadfs`.
 
-## Extras
+Only the resolved upstream URLs work on the device. The radio.garden redirect URL
+requires browser-style request headers that the firmware doesn't send.
 
-`tools/mac_cast.py` turns a Mac into a station the puck can tune, so you can play
-Mac audio through it. (Bluetooth is not possible — the ESP32-S3 has no Bluetooth
-Classic, so A2DP cannot work on this hardware.)
+## Play audio from a Mac
 
-A serial console at 115200 exposes everything: `help`, `status`, `stats`, `tasks`,
-`tune`, `search`, `press`, `ramp`, `netkill`.
+`tools/mac_cast.py` serves Mac audio as an MP3 stream that the device can tune:
+
+```bash
+python3 tools/mac_cast.py --list
+python3 tools/mac_cast.py --input :0
+```
+
+Then tune `http://<your-mac-ip>:8100/live` on the device.
+
+To capture system audio rather than a microphone, install a loopback driver such
+as BlackHole and select it with `--input`.
+
+**Note:** The ESP32-S3 doesn't support Bluetooth Classic, so this device can't
+work as a Bluetooth speaker. A2DP requires BR/EDR, which the radio hardware
+doesn't implement.
+
+## Serial console
+
+Connect at 115200 baud and enter `help` for the command list. Commands include
+`status`, `stats`, `tasks`, `tune`, `search`, `press`, `ramp`, and `netkill`.
 
 ## Documentation
 
-- **[SETUP.md](SETUP.md)** — the user flow in full, plus every assumption the
-  design depends on and which of them are verified.
-- **[RESEARCH-BRIEF.md](RESEARCH-BRIEF.md)** — measured baselines, the expensive
-  bugs and what caused them, and the problems still open.
+*   [SETUP.md](SETUP.md) describes the complete setup flow and lists the
+    assumptions the design depends on.
+*   [RESEARCH-BRIEF.md](RESEARCH-BRIEF.md) records measured performance figures,
+    resolved defects, and open problems.
 
-## Licence
+## License
 
-MIT. Bundles ESP8266Audio and ESP8266SAM (Earle F. Philhower, III), Adafruit
-NeoPixel, and ArduinoJson. Coastline geometry derived from Natural Earth (public
-domain). Station data from radio.garden and radio-browser.info; this project is
-not affiliated with either.
+MIT.
+
+This project bundles ESP8266Audio and ESP8266SAM by Earle F. Philhower, III,
+Adafruit NeoPixel, and ArduinoJson. Coastline geometry derives from Natural Earth
+public domain data. Station data comes from radio.garden and radio-browser.info.
+This project isn't affiliated with either service.

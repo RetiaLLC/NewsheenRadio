@@ -1,0 +1,163 @@
+# ESP32 Bit Pirate — Newsheen automatic release build.
+#
+# Builds the Retia `newsheen` env and publishes a PRERELEASE. In the scriptkitty
+# release-channel contract a prerelease means "automatically compiled, NOT yet
+# verified on hardware" — scriptkitty.sh offers it behind an "untested" warning.
+# After a human or the workbench verifies a build on real hardware, run the
+# "Bit Pirate Promote" workflow to flip it to a full release (= verified), which
+# makes it the flasher default.
+#
+# Tagging: newsheenradio-v<version>-sk.<n>, with <version> read from the VERSION file
+# (`version = "x.y"`) and <n> auto-increments per version.
+#
+# NOTE: this workflow lives on the fork's DEFAULT branch (so workflow_dispatch
+# registers), but it CHECKS OUT `retia-badge-port` — the branch that carries the
+# newsheen board + env. Bump BUILD_REF below if the Retia work moves branches.
+#   gh workflow run newsheenradio-release.yml -f notes="..."
+name: Newsheen Radio Release Build
+
+env:
+  BUILD_REF: retia-badge-port
+
+on:
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: "Extra release notes (what changed / why this build)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: newsheenradio-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # device = asset name suffix, matching the scriptkitty channel
+          # asset_pattern "newsheenradio-<device>.factory.bin"
+          - env: newsheen-speaker
+            device: newsheen
+            chip: esp32s3
+            flash: 16MB
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # the pioarduino platform rejects Python 3.14+; 3.13 is the toolchain
+          # this project is verified to build on locally (.venv313).
+          python-version: "3.13"
+          # no cache: "pip" — the repo has no requirements.txt/pyproject.toml to
+          # key on; the PlatformIO cache step below covers the heavy toolchain.
+      - name: Install PlatformIO + esptool
+        run: pip install platformio esptool
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.buildcache
+          key: pio-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Build firmware (${{ matrix.env }})
+        run: pio run -e ${{ matrix.env }}
+
+      - name: Merge factory image (DIO)
+        run: |
+          BOOT_APP0=$(find ~/.platformio/packages -path '*framework-arduinoespressif32*/tools/partitions/boot_app0.bin' | head -1)
+          test -n "$BOOT_APP0" || { echo "::error::boot_app0.bin not found"; exit 1; }
+          esptool --chip ${{ matrix.chip }} merge-bin \
+            -o newsheenradio-${{ matrix.device }}.factory.bin \
+            --flash-mode dio --flash-freq 80m --flash-size ${{ matrix.flash }} \
+            0x0 .pio/build/${{ matrix.env }}/bootloader.bin \
+            0x8000 .pio/build/${{ matrix.env }}/partitions.bin \
+            0xE000 "$BOOT_APP0" \
+            0x10000 .pio/build/${{ matrix.env }}/firmware.bin
+          # assert the image header really is DIO (byte 2 == 02)
+          HDR=$(xxd -p -l 4 newsheenradio-${{ matrix.device }}.factory.bin)
+          echo "header: $HDR"
+          [ "${HDR:4:2}" = "02" ] || { echo "::error::flash-mode byte is not DIO"; exit 1; }
+          sha256sum newsheenradio-${{ matrix.device }}.factory.bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: newsheenradio-${{ matrix.device }}
+          path: newsheenradio-*.factory.bin
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
+          fetch-depth: 0   # need all tags to pick the next -sk.<n>
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: newsheenradio-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create prerelease (auto build — untested)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXTRA_NOTES: ${{ inputs.notes }}
+        run: |
+          VERSION=$(tr -d " \t\r\n" < VERSION)
+          test -n "$VERSION" || { echo "::error::could not read version from VERSION"; exit 1; }
+          N=1
+          while git rev-parse -q --verify "refs/tags/newsheenradio-v${VERSION}-sk.${N}" >/dev/null; do
+            N=$((N + 1))
+          done
+          TAG="newsheenradio-v${VERSION}-sk.${N}"
+          {
+            echo "**Automatic build — UNTESTED.** Compiled from \`${GITHUB_SHA}\` by CI;"
+            echo "nobody has verified this on hardware yet. It appears on"
+            echo "[scriptkitty.sh](https://scriptkitty.sh) under \"untested auto-builds\"."
+            echo
+            echo "After hardware verification, run the **Bit Pirate Promote** workflow"
+            echo "with this tag to mark it verified and make it the flasher default."
+            echo
+            echo "| asset | device | sha256 |"
+            echo "|---|---|---|"
+            for f in dist/*.factory.bin; do
+              b=$(basename "$f"); dev=${b#newsheenradio-}; dev=${dev%.factory.bin}
+              echo "| $b | $dev | $(sha256sum "$f" | cut -d' ' -f1) |"
+            done
+            if [ -n "$EXTRA_NOTES" ]; then echo; echo "$EXTRA_NOTES"; fi
+          } > notes.md
+          gh release create "$TAG" --prerelease \
+            --title "Bit Pirate ${VERSION} auto build sk.${N}" \
+            --notes-file notes.md \
+            dist/*.factory.bin
+          echo "published $TAG"
+
+      - name: Ping scriptkitty.sh flasher
+        env:
+          SK_TOKEN: ${{ secrets.SCRIPTKITTY_DISPATCH_TOKEN }}
+        run: |
+          if [ -n "$SK_TOKEN" ]; then
+            curl -sf -X POST \
+              -H "Authorization: Bearer $SK_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/RetiaLLC/scriptkitty.sh/dispatches \
+              -d '{"event_type":"channel-release"}' \
+              && echo "flasher rebuild triggered" \
+              || echo "::warning::dispatch to scriptkitty.sh failed — site picks this up on its weekly cron"
+          else
+            echo "::notice::SCRIPTKITTY_DISPATCH_TOKEN not set — site picks this up on its weekly cron or a manual run"
+          fi
