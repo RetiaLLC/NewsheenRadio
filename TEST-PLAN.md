@@ -1,7 +1,23 @@
 # Test plan: the HTTPS crash
 
-A plan to find the root cause of the HTTPS panic and prove it fixed. Read
-`RESEARCH-BRIEF.md` §3 first for what is already ruled out.
+> **RESOLVED 2026-08-19.** It was never an HTTPS bug. `AudioGeneratorAAC` sized
+> its PCM buffer for 1024 samples per channel while the SBR-enabled libhelix
+> emits 2048, so every HE-AAC frame overran the buffer by 4096 bytes. TLS only
+> changed the heap layout so the overrun landed on IDLE0's task control block.
+> Fixed by `SbrSafeAAC` in `src/main.cpp`. See `RESEARCH-BRIEF.md` §3 and
+> `UPSTREAM-ESP8266AUDIO-HEAAC.md`.
+>
+> **What actually cracked it,** for the next investigation:
+>
+> | Step | Verdict |
+> | --- | --- |
+> | Phase 0, measure the failure rate first | Essential. Moving the units gave a **deterministic** 5.8 s repro, which made everything after it cheap. |
+> | T1.1 core dump | **Decisive.** The corruption pattern named the writer. |
+> | T2.3-style ablation ladder | Useful. Ruled out the handshake in one run. |
+> | T1.2 idle-stack instrumentation | Misleading on its own — IDLE0 sat at 232 bytes free right up to the panic, which looked like "not exhaustion" and was really "corrupted from outside". |
+> | T3.x sdkconfig experiments | Never needed. The toolchain fight would have been wasted effort. |
+>
+> The plan below is kept as written, because the ordering held up.
 
 ## What this bug is
 
