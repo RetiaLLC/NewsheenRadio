@@ -11,13 +11,13 @@
 # (`version = "x.y"`) and <n> auto-increments per version.
 #
 # NOTE: this workflow lives on the fork's DEFAULT branch (so workflow_dispatch
-# registers), but it CHECKS OUT `retia-badge-port` — the branch that carries the
-# newsheen board + env. Bump BUILD_REF below if the Retia work moves branches.
+# registers), but it CHECKS OUT `main` — the branch that carries the
+# newsheen board + env. Bump BUILD_REF below if the work moves branches.
 #   gh workflow run newsheenradio-release.yml -f notes="..."
 name: Newsheen Radio Release Build
 
 env:
-  BUILD_REF: retia-badge-port
+  BUILD_REF: main
 
 on:
   workflow_dispatch:
