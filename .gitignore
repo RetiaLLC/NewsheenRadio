@@ -1,0 +1,19 @@
+# build output
+.pio/
+dist/*.bin
+
+# Generated catalogue — rebuild with tools/radio_garden_dump.py + build_catalogue.py.
+# 3.6 MB of derived data that would otherwise churn on every refresh.
+data/stations.tsv
+data/countries.idx
+tools/radio_garden_out/
+tools/*.log
+
+# Personal audio dropped in for local playback
+data/*.mp3
+
+# macOS
+.DS_Store
+
+# platform-generated
+src/idf_component.yml*

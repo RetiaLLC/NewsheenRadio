@@ -1,0 +1,11 @@
+# Newsheen radio — 16 MB flash.
+# The data partition is named "spiffs" because arduino-esp32's LittleFS library
+# looks up that label by default. It is formatted as LittleFS.
+# A coredump partition is included deliberately: this device has no UART header
+# and its USB-CDC console dies with the panic, so a crash is otherwise invisible.
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x5000,
+otadata,    data, ota,      0xe000,   0x2000,
+app0,       app,  ota_0,    0x10000,  0x400000,
+spiffs,     data, spiffs,   0x410000, 0xBE0000,
+coredump,   data, coredump, 0xFF0000, 0x10000,
