@@ -145,6 +145,25 @@ doesn't implement.
 Connect at 115200 baud and enter `help` for the command list. Commands include
 `status`, `stats`, `tasks`, `tune`, `search`, `press`, `ramp`, and `netkill`.
 
+## Known issue: HTTPS stations can crash the device
+
+Tuning an HTTPS station can panic and reboot the device. It happens at decoder
+start, right after the stream prebuffers, and it is intermittent rather than
+every time. Plain HTTP is unaffected: 30 consecutive plain-HTTP station changes
+run clean, while HTTPS fails within 2 to 10, and sometimes on the first tune.
+About half the station directory is HTTPS.
+
+The device recovers on its own. It reboots, and the boot guard forgets the saved
+station after three starts without stable playback, so it cannot get stuck in a
+crash loop.
+
+The root cause is not yet found. Three theories have been tested on hardware and
+disproven: multichannel AAC frames, the audio task stack size, and heap
+corruption. `RESEARCH-BRIEF.md` records what was ruled out and how.
+
+To reproduce it, run `tools/racetest.py`; `tools/plaintest.py` is the plain-HTTP
+control.
+
 ## Documentation
 
 *   [SETUP.md](SETUP.md) describes the complete setup flow and lists the
