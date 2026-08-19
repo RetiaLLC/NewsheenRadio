@@ -112,15 +112,68 @@ are those reachable from an Arduino build without a custom sdkconfig? Does
 AP+STA coexistence cost measurably once RSSI is controlled (an earlier +6%
 reading has the same drift problem)?
 
-### 3. AAC crash — root cause never established
-An AAC stream panicked with `BREAK instr` and a `|<-CORRUPTED` backtrace. It
-stopped after raising the audio task 16 K → 32 K, **but the headroom measurement
-disproves that theory** (29232 free of 32768; AAC uses ~3.5 KB, same as MP3). So
-the fix is unexplained and the bug may still be latent.
+### 3. Memory corruption on TLS station changes — isolated, not yet fixed
 
-**Questions:** Known crash modes in ESP8266Audio's libhelix-aac on malformed or
-truncated ADTS? Is there a decoder-level guard (frame validation before
-`AACDecode`) that others apply?
+This was filed as an "AAC crash". It isn't an AAC bug, and it isn't a stack-size
+bug. Both of those explanations are now disproven on hardware.
+
+**Reproduce it in about 40 seconds** with `tools/racetest.py`: switch between
+three HTTPS stations every 6 seconds. The device panics within 2 to 10 switches.
+
+| Test | Result |
+| --- | --- |
+| 30 station changes, plain HTTP only | No crash |
+| 30 station changes, HTTPS | Panic within 2–10 |
+| 7 minutes of continuous HTTPS playback, no switching | No crash |
+
+So the trigger is TLS *session setup on a station change*, not streaming, not
+decoding, and not any one station.
+
+The panic is inconsistent, which is what made this hard to read. Three signatures
+came from the same build: `stack overflow in task IDLE0`, `LoadProhibited` inside
+`xTaskIncrementTick` walking a task list, and `BREAK instr` inside
+`_UserExceptionVector`. All three carry a `|<-CORRUPTED` backtrace, and the last
+means the stack pointer was already invalid when the exception was taken. About
+half the time the reported task name is garbage, because the corruption reaches
+the TCB.
+
+What has been ruled out, each on hardware:
+
+*   **Multichannel AAC.** A crafted vector with `channel_config=6` produced 1,393
+    instances of error −15 (`ERR_AAC_NCHANS_TOO_HIGH`) and 371 of error −3, and
+    never crashed.
+*   **Audio task stack.** It crashes identically at 16 K and 32 K. The audio task
+    peaks at about 5 KB even on the station that crashes it, and
+    `usStackHighWaterMark` is a minimum-ever figure, so a deep excursion cannot
+    be missed by sampling.
+*   **Heap block corruption.** `heap_caps_check_integrity_all()` bracketing every
+    step of teardown and tune reports clean right up to the panic.
+*   **The TLS free path.** Deliberately leaking the client instead of freeing it
+    still crashes, so this is TLS setup rather than teardown.
+
+**Where suspicion currently sits.** IDLE0 is the task the corruption lands on,
+and it has very little room: this Arduino build sets
+`CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=1024` (lower than ESP-IDF's own 1536
+default) and the app leaves about **232 bytes free**, so it runs at ~77%.
+
+Be careful with the mechanism. An early guess was that Xtensa runs interrupt
+handlers on the current task's stack, so TLS crypto interrupts would run IDLE0
+off the end. **That is probably wrong:** this build also sets
+`CONFIG_FREERTOS_ISR_STACKSIZE=2096`, and ESP-IDF on Xtensa switches to a
+dedicated per-core interrupt stack. So a deep ISR is not by itself the
+explanation, and the reason IDLE0 specifically is being smashed on TLS setup is
+still unexplained. `CONFIG_MBEDTLS_HARDWARE_AES/MPI/SHA` are all enabled, so the
+handshake does drive DMA-capable crypto peripherals.
+
+The cheap next experiment is to raise the idle stack and see whether the
+reproducer goes quiet. **pioarduino supports `custom_sdkconfig`,** which rebuilds
+the IDF libraries — note this, because the brief elsewhere assumed sdkconfig was
+out of reach on an Arduino build. It takes several minutes and it writes
+`.dummy/`, `CMakeLists.txt` and `dependencies.lock` into the project directory.
+
+**Questions:** Is IDLE stack exhaustion via crypto ISRs a known ESP32-S3 failure
+mode? Does anyone run `WiFiClientSecure` through repeated connect cycles without
+this? Is there a supported way to keep one TLS session across station changes?
 
 ### 4. Codec coverage
 FLAC and Opus decoders are bundled in ESP8266Audio and currently refused by the

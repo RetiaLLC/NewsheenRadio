@@ -34,6 +34,9 @@
 #include <AudioFileSourceBuffer.h>
 #include <AudioFileSourceID3.h>
 #include <ESP8266SAM.h>
+#ifdef HEAP_TRIPWIRE
+#include <esp_heap_caps.h>
+#endif
 
 #include "board_config.h"
 #include "chiptune.h"
@@ -442,11 +445,29 @@ static void ledTask(void *) {
 }
 
 // -------------------------------------------------------------- audio helpers
+#ifdef HEAP_TRIPWIRE
+// Bisect memory corruption by checking integrity at each step of teardown and
+// tune. The first step that reports FAIL is the one that scribbled; the panic
+// it eventually causes surfaces far away, on another task, and names the wrong
+// culprit.
+static void heapTrip(const char *where) {
+    if (!heap_caps_check_integrity_all(true)) {
+        Serial.printf("[heap] CORRUPT after %s\n", where);
+    } else {
+        Serial.printf("[heap] ok after %s\n", where);
+    }
+}
+#else
+#define heapTrip(x) ((void)0)
+#endif
+
 static void teardown() {
+    heapTrip("teardown:enter");
     if (gen && gen->isRunning()) {
         gen->stop();
     }
     gen = nullptr;
+    heapTrip("gen->stop");
     // Wrappers do not own what they wrap, so unwind outermost first.
     delete srcBuf;
     srcBuf = nullptr;
@@ -454,11 +475,14 @@ static void teardown() {
     srcId3 = nullptr;
     delete srcFile;
     srcFile = nullptr;
+    heapTrip("delete wrappers");
     // Producer first: it holds a pointer to srcNet and must be parked before
     // the socket underneath it is freed.
     streamRing.stop();
+    heapTrip("ring.stop");
     delete srcNet;
     srcNet = nullptr;
+    heapTrip("delete srcNet");
     if (out) {
         out->stop();
     }
@@ -631,9 +655,11 @@ static bool startStream(const char *url, const char *name, int depth = 0) {
         teardown();
         return false;
     }
+    heapTrip("ring.start");
     // Start with a cushion so the first seconds aren't fighting the network.
     uint32_t t0 = millis();
     bool ready = streamRing.prebuffer(PREBUFFER_BYTES, 8000);
+    heapTrip("prebuffer");
     Serial.printf("[stream] prebuffered %u bytes in %u ms%s\n", streamRing.available(),
                   millis() - t0, ready ? "" : " (timed out, starting anyway)");
 
@@ -1559,7 +1585,12 @@ void setup() {
     // tripping the canary cleanly (the panic shows "BREAK instr" and a
     // |<-CORRUPTED backtrace, which is what an overflow looks like when it
     // lands mid-frame).
-    xTaskCreatePinnedToCore(audioTask, "audio", 32768, nullptr, 2, nullptr, 1);
+    // Size is a build flag so the "did the stack bump actually fix the AAC
+    // crash?" question is a one-flag experiment rather than an edit.
+#ifndef AUDIO_STACK
+#define AUDIO_STACK 32768
+#endif
+    xTaskCreatePinnedToCore(audioTask, "audio", AUDIO_STACK, nullptr, 2, nullptr, 1);
 
     delay(BOOT_SETTLE_MS);                // see the note at the top — do not remove
     WiFi.mode(WIFI_AP_STA);               // AP always up, so you can never lock yourself out
@@ -1837,6 +1868,10 @@ static void printStatus() {
                       streamRing.inRate() / 1024.0f, streamRing.inTotal());
         Serial.printf("dec out    : %.1f KB/s (%u B total)\n",
                       streamRing.outRate() / 1024.0f, streamRing.outTotal());
+        if (streamRing.abandonedProducers()) {
+            Serial.printf("WARNING    : %u producer(s) outlived stop()\n",
+                          streamRing.abandonedProducers());
+        }
     } else if (srcBuf) {
         Serial.printf("buffer     : %u / %u bytes\n", srcBuf->getFillLevel(), STREAM_BUF_BYTES);
     }
