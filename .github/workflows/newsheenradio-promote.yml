@@ -1,4 +1,4 @@
-# Bit Pirate promote: mark a release VERIFIED after hardware verification.
+# Newsheen Radio promote: mark a release VERIFIED after hardware verification.
 #
 # The scriptkitty release-channel contract: prerelease = untested auto-build,
 # full release = verified on real hardware. This workflow does the promotion:

@@ -1,10 +1,10 @@
-# ESP32 Bit Pirate — Newsheen automatic release build.
+# ESP32 Newsheen Radio — Newsheen automatic release build.
 #
 # Builds the Retia `newsheen` env and publishes a PRERELEASE. In the scriptkitty
 # release-channel contract a prerelease means "automatically compiled, NOT yet
 # verified on hardware" — scriptkitty.sh offers it behind an "untested" warning.
 # After a human or the workbench verifies a build on real hardware, run the
-# "Bit Pirate Promote" workflow to flip it to a full release (= verified), which
+# "Newsheen Radio Promote" workflow to flip it to a full release (= verified), which
 # makes it the flasher default.
 #
 # Tagging: newsheenradio-v<version>-sk.<n>, with <version> read from the VERSION file
@@ -129,7 +129,7 @@ jobs:
             echo "nobody has verified this on hardware yet. It appears on"
             echo "[scriptkitty.sh](https://scriptkitty.sh) under \"untested auto-builds\"."
             echo
-            echo "After hardware verification, run the **Bit Pirate Promote** workflow"
+            echo "After hardware verification, run the **Newsheen Radio Promote** workflow"
             echo "with this tag to mark it verified and make it the flasher default."
             echo
             echo "| asset | device | sha256 |"
@@ -141,7 +141,7 @@ jobs:
             if [ -n "$EXTRA_NOTES" ]; then echo; echo "$EXTRA_NOTES"; fi
           } > notes.md
           gh release create "$TAG" --prerelease \
-            --title "Bit Pirate ${VERSION} auto build sk.${N}" \
+            --title "Newsheen Radio ${VERSION} auto build sk.${N}" \
             --notes-file notes.md \
             dist/*.factory.bin
           echo "published $TAG"
