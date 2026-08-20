@@ -1275,21 +1275,77 @@ static void setupWeb() {
         server.sendHeader("Access-Control-Allow-Origin", "*");
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
         server.send(200, "application/json", "");
+        // Each entry also reports `len`, the byte span of that country's rows,
+        // so the globe can spread a sample across the whole country instead of
+        // taking the first N. The index is ordered by offset, so a country's
+        // span is the next country's offset minus its own; the last one runs to
+        // the end of the catalogue.
+        uint32_t tsvSize = 0;
+        {
+            File s = LittleFS.open("/stations.tsv", "r");
+            if (s) {
+                tsvSize = s.size();
+                s.close();
+            }
+        }
         server.sendContent("[");
         bool first = true;
-        while (f.available()) {
-            String line = f.readStringUntil('\n');
-            int t1 = line.indexOf('\t');
-            int t2 = line.indexOf('\t', t1 + 1);
-            if (t1 < 0 || t2 < 0) {
-                continue;
+        String pending;                 // previous row, held until its span is known
+        String line, out;
+        out.reserve(1200);
+        static char cbuf[1024];
+
+        auto flushPending = [&](uint32_t nextOff) {
+            if (!pending.length()) {
+                return;
             }
-            String name = line.substring(0, t1);
-            name.replace("\"", "'");
-            server.sendContent(String(first ? "" : ",") + "{\"name\":\"" + name +
-                               "\",\"off\":" + line.substring(t1 + 1, t2) +
-                               ",\"n\":" + line.substring(t2 + 1) + "}");
-            first = false;
+            int t1 = pending.indexOf('\t');
+            int t2 = pending.indexOf('\t', t1 + 1);
+            if (t1 > 0 && t2 > 0) {
+                String name = pending.substring(0, t1);
+                name.replace("\"", "'");
+                uint32_t off = (uint32_t)pending.substring(t1 + 1, t2).toInt();
+                uint32_t len = (nextOff > off) ? (nextOff - off) : 0;
+                out += first ? "" : ",";
+                first = false;
+                out += "{\"name\":\"" + name + "\",\"off\":" + String(off) +
+                       ",\"n\":" + pending.substring(t2 + 1) + ",\"len\":" + String(len) + "}";
+                if (out.length() > 900) {
+                    server.sendContent(out);
+                    out = "";
+                }
+            }
+            pending = "";
+        };
+
+        // Block reads, not readStringUntil(): the same byte-at-a-time cost that
+        // made the station list take 7.6 s applies to this file too.
+        while (f.available()) {
+            int n = f.readBytes(cbuf, sizeof(cbuf));
+            if (n <= 0) {
+                break;
+            }
+            for (int i = 0; i < n; i++) {
+                if (cbuf[i] != '\n') {
+                    if (line.length() < 200) {
+                        line += cbuf[i];
+                    }
+                    continue;
+                }
+                int t1 = line.indexOf('\t');
+                if (t1 > 0) {
+                    int t2 = line.indexOf('\t', t1 + 1);
+                    if (t2 > 0) {
+                        flushPending((uint32_t)line.substring(t1 + 1, t2).toInt());
+                        pending = line;
+                    }
+                }
+                line = "";
+            }
+        }
+        flushPending(tsvSize);
+        if (out.length()) {
+            server.sendContent(out);
         }
         server.sendContent("]");
         server.sendContent("");
@@ -1299,8 +1355,31 @@ static void setupWeb() {
     server.on("/api/catalogue", []() {
         uint32_t off = server.arg("off").toInt();
         int want = server.arg("n").toInt();
-        if (want <= 0 || want > 400) {
+        if (want <= 0 || want > 700) {
             want = 200;
+        }
+        // Optional byte span of the requested slice (one country). Without it a
+        // sample strides the whole file, which is right for the world view and
+        // wrong for a country.
+        uint32_t len = (uint32_t)server.arg("len").toInt();
+        // Optional viewport filter: bbox=latMin,latMax,lonMin,lonMax. Rows
+        // outside it are skipped, so zooming in can pull the stations that are
+        // actually on screen rather than the first N of an alphabetical list.
+        float bbLatMin = 0, bbLatMax = 0, bbLonMin = 0, bbLonMax = 0;
+        bool haveBox = false;
+        {
+            String b = server.arg("bbox");
+            if (b.length()) {
+                int c1 = b.indexOf(','), c2 = b.indexOf(',', c1 + 1),
+                    c3 = b.indexOf(',', c2 + 1);
+                if (c1 > 0 && c2 > 0 && c3 > 0) {
+                    bbLatMin = b.substring(0, c1).toFloat();
+                    bbLatMax = b.substring(c1 + 1, c2).toFloat();
+                    bbLonMin = b.substring(c2 + 1, c3).toFloat();
+                    bbLonMax = b.substring(c3 + 1).toFloat();
+                    haveBox = true;
+                }
+            }
         }
         File f = LittleFS.open("/stations.tsv", "r");
         if (!f) {
@@ -1312,9 +1391,16 @@ static void setupWeb() {
         // which is what the globe should open with instead of nothing.
         int sample = server.arg("sample").toInt();
         uint32_t fsize = f.size();
-        uint32_t stride = (sample > 0 && fsize) ? fsize / (uint32_t)sample : 0;
+        // Stride across the requested span: the whole file when no `len` was
+        // given, otherwise just this country's rows.
+        uint32_t span = (len && off + len <= fsize) ? len : (fsize > off ? fsize - off : 0);
+        uint32_t limit = off + span;                 // stop here, not at EOF
+        uint32_t stride = (sample > 0 && span) ? span / (uint32_t)sample : 0;
         if (sample > 0) {
             want = sample;
+        }
+        if (haveBox) {
+            stride = 0;                              // a viewport scan must not skip rows
         }
         f.seek(off);
         server.sendHeader("Access-Control-Allow-Origin", "*");
@@ -1334,13 +1420,13 @@ static void setupWeb() {
         bool done = false;
         bool overlong = false;
 
-        uint32_t nextSeek = stride;
-        while (!done && f.available()) {
+        uint32_t nextSeek = off + stride;
+        while (!done && f.available() && f.position() < limit) {
             if (stride) {
                 // one row per stride, then jump; skip the partial line we land on
                 f.seek(nextSeek);
                 nextSeek += stride;
-                if (nextSeek >= fsize) {
+                if (nextSeek >= limit) {
                     done = true;
                 }
                 line = "";
@@ -1375,6 +1461,22 @@ static void setupWeb() {
                         break;
                     }
                     p[k] = at++;
+                }
+                if (ok && haveBox) {
+                    // Rows with no coordinates can never be on screen.
+                    if (p[3] - p[2] > 1 && p[4] - p[3] > 1) {
+                        float la = line.substring(p[2] + 1, p[3]).toFloat();
+                        float lo = line.substring(p[3] + 1, p[4]).toFloat();
+                        bool inLat = (la >= bbLatMin && la <= bbLatMax);
+                        // A viewport straddling the date line wraps, so the
+                        // longitude test flips to an OR when min > max.
+                        bool inLon = (bbLonMin <= bbLonMax)
+                                         ? (lo >= bbLonMin && lo <= bbLonMax)
+                                         : (lo >= bbLonMin || lo <= bbLonMax);
+                        ok = inLat && inLon;
+                    } else {
+                        ok = false;
+                    }
                 }
                 if (ok) {
                     String name = line.substring(0, p[0]);

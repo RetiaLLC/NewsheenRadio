@@ -2,10 +2,10 @@
 .pio/
 dist/*.bin
 
-# Generated catalogue — rebuild with tools/radio_garden_dump.py + build_catalogue.py.
-# 3.6 MB of derived data that would otherwise churn on every refresh.
-data/stations.tsv
-data/countries.idx
+# The catalogue IS committed: the "with catalog" release variant merges it into
+# a factory image, and CI builds from a clean checkout, so it has to be in the
+# repo. Refresh it with tools/radio_garden_dump.py + build_catalogue.py; expect
+# a large diff when you do.
 tools/radio_garden_out/
 tools/*.log
 

@@ -107,6 +107,31 @@ The build requires an arduino-esp32 3.x platform. ESP8266Audio 2.4 includes the
 IDF5 I²S driver, which doesn't compile against the 2.0.x platforms that other
 puck projects use.
 
+## Which image to flash
+
+Two factory images are published for each release.
+
+| Image | Size | Contains |
+| --- | --- | --- |
+| `newsheenradio-newsheen.factory.bin` | ~1.6 MB | Firmware only. Search still works over the internet directory. |
+| `newsheenradio-newsheen-catalog.factory.bin` | ~16 MB | The same firmware plus the 37,963-station offline catalog, so the globe and country browser work without an internet directory. |
+
+The catalog image is ten times larger because the LittleFS image it carries is
+the full size of the filesystem partition, not the size of the data in it.
+
+**Both images erase your saved Wi-Fi credentials.** A factory image starts at
+offset `0x0` and spans the NVS partition at `0x9000`, so flashing either one
+clears the stored network and the device returns to setup mode. The catalog
+image additionally replaces the whole filesystem, including any MP3 files you
+uploaded. To update firmware without losing either, flash
+`firmware.bin` to `0x10000` instead of using a factory image:
+
+```bash
+esptool --chip esp32s3 -p <port> -b 115200 write-flash \
+  --flash-mode dio --flash-freq 80m --flash-size 16MB \
+  0x10000 .pio/build/newsheen-speaker/firmware.bin
+```
+
 ## Build the station catalog
 
 ```bash

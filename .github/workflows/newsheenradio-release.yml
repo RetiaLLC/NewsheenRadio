@@ -47,6 +47,15 @@ jobs:
             device: newsheen
             chip: esp32s3
             flash: 16MB
+            fs: ""
+          # Same firmware, but with the 38k-station offline catalogue merged in
+          # at the filesystem offset. ~16 MB instead of ~1.6 MB, because the
+          # LittleFS image is the full partition size.
+          - env: newsheen-speaker
+            device: newsheen-catalog
+            chip: esp32s3
+            flash: 16MB
+            fs: "yes"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -74,17 +83,34 @@ jobs:
       - name: Build firmware (${{ matrix.env }})
         run: pio run -e ${{ matrix.env }}
 
+      - name: Build filesystem image
+        if: matrix.fs == 'yes'
+        run: |
+          test -s data/stations.tsv || { echo "::error::data/stations.tsv missing — the catalogue build needs it committed"; exit 1; }
+          pio run -e ${{ matrix.env }} -t buildfs
+          ls -l .pio/build/${{ matrix.env }}/littlefs.bin
+
       - name: Merge factory image (DIO)
         run: |
           BOOT_APP0=$(find ~/.platformio/packages -path '*framework-arduinoespressif32*/tools/partitions/boot_app0.bin' | head -1)
           test -n "$BOOT_APP0" || { echo "::error::boot_app0.bin not found"; exit 1; }
+          # The filesystem offset comes from partitions.csv rather than a
+          # literal, so moving the partition cannot silently mis-place it.
+          FS_ARG=""
+          if [ "${{ matrix.fs }}" = "yes" ]; then
+            FS_OFF=$(awk -F',' '/^spiffs/{gsub(/[ \t]/,"",$4); print $4}' partitions.csv)
+            test -n "$FS_OFF" || { echo "::error::could not read the spiffs offset from partitions.csv"; exit 1; }
+            echo "merging the catalogue filesystem at $FS_OFF"
+            FS_ARG="$FS_OFF .pio/build/${{ matrix.env }}/littlefs.bin"
+          fi
           esptool --chip ${{ matrix.chip }} merge-bin \
             -o newsheenradio-${{ matrix.device }}.factory.bin \
             --flash-mode dio --flash-freq 80m --flash-size ${{ matrix.flash }} \
             0x0 .pio/build/${{ matrix.env }}/bootloader.bin \
             0x8000 .pio/build/${{ matrix.env }}/partitions.bin \
             0xE000 "$BOOT_APP0" \
-            0x10000 .pio/build/${{ matrix.env }}/firmware.bin
+            0x10000 .pio/build/${{ matrix.env }}/firmware.bin \
+            $FS_ARG
           # assert the image header really is DIO (byte 2 == 02)
           HDR=$(xxd -p -l 4 newsheenradio-${{ matrix.device }}.factory.bin)
           echo "header: $HDR"
