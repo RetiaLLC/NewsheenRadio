@@ -47,24 +47,33 @@ they worked and did not.
 
 ## Before you start
 
-Bench state as of 2026-08-19:
+The bug this plan targets is fixed, so what follows is only useful for the next
+investigation. The bench has moved since it was written.
 
-| Unit | Port | IP | RSSI |
-| --- | --- | --- | --- |
-| Puck A | `/dev/ttyACM0` | 192.168.1.221 | −85 dBm |
-| Puck B | `/dev/ttyACM1` | 192.168.1.52 | −83 dBm |
+Scripts live in `tools/` in this repo and were run from `~/nsr/` on the
+workbench Pi. Two that matter:
 
-Both on `SpectrumSetup-44`. Scripts live in `~/nsr/` on workbench5 and in
-`tools/` in this repo.
+*   `tools/dut_io.py` resolves a puck **by MAC** through `/dev/serial/by-id/`.
+    Do that rather than hard-coding `/dev/ttyACM<N>`: a native-USB puck
+    re-enumerates on every reset and the node number moves.
+*   `tools/phase0.py` reports tunes-to-failure. `tools/rescue.py` breaks a puck
+    out of an auto-resume crash loop.
 
-Two cautions:
+Three bench cautions, all learned the hard way:
 
-*   **Both links are weak.** −83 to −85 dBm means retransmissions are common,
-    and that is an uncontrolled variable in every test below. Phase 4 addresses
-    it; until then, do not compare runs taken at different distances.
+*   **Opening the CDC port resets the puck** (`rst:0x15 USB_UART_CHIP_RESET`),
+    so a fresh connection lands mid-boot. Wait for the banner before deciding
+    the CLI is dead. Never RTS-reset from a harness.
+*   **The rfc2217 portal owns `/dev/ttyACM*`**, and its proxies die the moment a
+    native-USB puck resets. Stop the portal and use the device nodes directly,
+    then start it again afterwards. `POST /api/debug/stop` first — OpenOCD
+    attaches per slot.
 *   **Verify every flash.** Check for `Hash of data verified`. Piping esptool
-    through `tail` hides its exit status, and a silently failed flash looks
-    exactly like a build whose change did nothing.
+    through `tail` hides its exit status.
+
+**Known defect in this tooling:** the long runs stall after roughly ten trials.
+The devices probe healthy each time, so it is the scripts, not the firmware.
+Fix that before attempting the 500-tune or 24-hour runs below.
 
 ---
 
