@@ -23,7 +23,7 @@ on:
       device:
         description: "Which device build was verified"
         type: choice
-        options: [newsheen, all]
+        options: [newsheen, newsheen-catalog, all]
         required: true
       method:
         description: "How it was verified"
@@ -53,7 +53,7 @@ jobs:
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName \
             || { echo "::error::release $TAG not found"; exit 1; }
 
-          if [ "$DEVICE" = "all" ]; then DEVICES="newsheen"; else DEVICES="$DEVICE"; fi
+          if [ "$DEVICE" = "all" ]; then DEVICES="newsheen newsheen-catalog"; else DEVICES="$DEVICE"; fi
           for d in $DEVICES; do
             python3 - "$d" <<'PY'
           import json, os, sys, datetime
